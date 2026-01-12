@@ -10,9 +10,10 @@ interface SidebarProps {
   isAdmin?: boolean;
   onAdminClick?: () => void;
   currentUserId: string;
+  onLogout: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ chats, activeChatId, onChatSelect, onProfileClick, isAdmin, onAdminClick, currentUserId }) => {
+const Sidebar: React.FC<SidebarProps> = ({ chats, activeChatId, onChatSelect, onProfileClick, isAdmin, onAdminClick, currentUserId, onLogout }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredChats = chats.filter(chat => {
@@ -42,6 +43,13 @@ const Sidebar: React.FC<SidebarProps> = ({ chats, activeChatId, onChatSelect, on
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           )}
+          <button
+            onClick={onLogout}
+            className="p-2 bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded-full transition-colors"
+            title="تسجيل الخروج"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          </button>
         </div>
       </div>
 

@@ -21,13 +21,15 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, onDelete, onPi
     <div className={`flex w-full ${isMe ? 'justify-start' : 'justify-end'} group relative mb-4`}>
       <div className={`relative flex flex-col ${isMe ? 'items-start' : 'items-end'} max-w-[85%]`}>
 
-        {/* Reaction Picker on Hover (Desktop) / Long Press (Simulation) */}
-        <div className={`absolute -top-10 opacity-0 group-hover:opacity-100 transition-opacity z-20 flex gap-1 bg-white/90 backdrop-blur p-1.5 rounded-full shadow-xl border border-white/50 ${isMe ? 'left-0' : 'right-0'}`}>
+        {/* Reaction Picker - Vertical Side Panel */}
+        <div className={`absolute top-0 z-50 flex flex-col gap-1.5 p-1.5 rounded-full glass-panel shadow-lg transition-all duration-300 ${isMe ? '-left-10 -translate-x-2' : '-right-10 translate-x-2'
+          } ${showReactionPicker ? 'opacity-100 pointer-events-auto scale-100' : 'opacity-0 pointer-events-none scale-75 group-hover:opacity-100 group-hover:pointer-events-auto group-hover:scale-100'}`}>
+          <div className="absolute inset-0 bg-white/80 backdrop-blur-md rounded-full -z-10 shadow-sm"></div>
           {QUICK_REACTIONS.map(emoji => (
             <button
               key={emoji}
-              onClick={() => onReact(emoji)}
-              className="hover:scale-150 transition-transform px-1 text-lg"
+              onClick={() => { onReact(emoji); setShowReactionPicker(false); }}
+              className="hover:scale-125 transition-transform p-1 text-lg leading-none filter drop-shadow-sm active:scale-95"
             >
               {emoji}
             </button>
@@ -88,21 +90,24 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, onDelete, onPi
         </div>
 
         {/* Display Reactions */}
+        {/* Display Reactions */}
         {message.reactions && message.reactions.length > 0 && (
-          <div className={`flex flex-wrap gap-1 mt-[-8px] z-10 ${isMe ? 'justify-start' : 'justify-end'}`}>
-            {message.reactions.map(r => (
-              <button
-                key={r.emoji}
-                onClick={() => onReact(r.emoji)}
-                className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs shadow-sm border transition-all hover:scale-110 ${r.me
-                  ? 'bg-teal-500 border-teal-400 text-white shadow-teal-500/30'
-                  : 'bg-white border-slate-200 text-slate-600 shadow-sm'
-                  }`}
-              >
-                <span>{r.emoji}</span>
-                {r.count > 1 && <span className="font-bold">{r.count}</span>}
-              </button>
-            ))}
+          <div className={`absolute -bottom-3 z-10 flex flex-wrap gap-1 ${isMe ? 'right-4' : 'left-4'}`}>
+            <div className={`flex items-center gap-1 p-1 pr-2 pl-2 rounded-full shadow-sm bg-white border border-slate-100`}>
+              {message.reactions.map(r => (
+                <button
+                  key={r.emoji}
+                  onClick={() => onReact(r.emoji)}
+                  className={`flex items-center gap-0.5 px-1 py-0.5 rounded-full text-[10px] transition-transform hover:scale-110 ${r.me
+                    ? 'bg-blue-100/50 text-blue-600 font-bold'
+                    : 'bg-transparent text-slate-600'
+                    }`}
+                >
+                  <span className="text-sm leading-none">{r.emoji}</span>
+                  {r.count > 1 && <span className="opacity-80 ml-0.5">{r.count}</span>}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

@@ -37,6 +37,7 @@ export interface Message {
 export interface ChatSettings {
   soundEnabled: boolean;
   autoDeleteEnabled: boolean;
+  autoDeleteDuration?: number; // Duration in minutes
   selectedSound: 'default' | 'soft' | 'alert' | 'melody';
 }
 

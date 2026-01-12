@@ -36,6 +36,9 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [connectionStatus, setConnectionStatus] = useState('جاري الاتصال...');
 
+  const [isMuted, setIsMuted] = useState(false);
+  const [isCameraOff, setIsCameraOff] = useState(false);
+
   const pc = useRef<RTCPeerConnection>(new RTCPeerConnection(servers));
 
   useEffect(() => {
@@ -93,9 +96,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
           }
         });
       } else {
-        // Callee Logic: Wait for Local Description set first? No, we wait for Offer.
-
-        // We need to continuously listen to the doc in case offer comes in late (or already there)
+        // Callee Logic
         const unsubscribe = onSnapshot(callDoc, async (snapshot) => {
           const data = snapshot.data();
           if (!pc.current.currentRemoteDescription && data?.offer) {
@@ -152,6 +153,26 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
     onClose();
   };
 
+  const toggleMute = () => {
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!audioTrack.enabled);
+      }
+    }
+  };
+
+  const toggleCamera = () => {
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsCameraOff(!videoTrack.enabled);
+      }
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center">
       <div className="relative w-full h-full md:w-[90%] md:h-[90vh] md:max-w-4xl bg-slate-900 md:rounded-3xl overflow-hidden shadow-2xl border-slate-700">
@@ -185,15 +206,26 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
             autoPlay
             muted
             playsInline
-            className="w-full h-full object-cover scale-x-[-1]"
+            className={`w-full h-full object-cover scale-x-[-1] ${isCameraOff ? 'hidden' : ''}`}
           />
+          {isCameraOff && (
+            <div className="flex items-center justify-center h-full w-full bg-slate-800 text-slate-500">
+              <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+            </div>
+          )}
         </div>
 
         {/* Controls */}
         <div className="absolute bottom-10 left-0 right-0 flex items-center justify-center gap-4 md:gap-6 z-30">
-          <button className="p-3 md:p-4 bg-slate-800 hover:bg-slate-700 rounded-full text-white transition-colors">
-            {/* Mute toggle icon placeholder */}
-            <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" strokeWidth="2" /></svg>
+          <button
+            onClick={toggleCamera}
+            className={`p-3 md:p-4 rounded-full text-white transition-colors ${isCameraOff ? 'bg-red-500 hover:bg-red-600' : 'bg-slate-800 hover:bg-slate-700'}`}
+          >
+            {isCameraOff ? (
+              <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3l18 18" /></svg>
+            ) : (
+              <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" strokeWidth="2" /></svg>
+            )}
           </button>
 
           <button
@@ -203,9 +235,15 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
             <svg className="w-7 h-7 md:w-8 md:h-8 rotate-[135deg]" fill="currentColor" viewBox="0 0 20 20"><path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" /></svg>
           </button>
 
-          <button className="p-3 md:p-4 bg-slate-800 hover:bg-slate-700 rounded-full text-white transition-colors">
-            {/* Camera toggle icon placeholder */}
-            <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" strokeWidth="2" /></svg>
+          <button
+            onClick={toggleMute}
+            className={`p-3 md:p-4 rounded-full text-white transition-colors ${isMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-slate-800 hover:bg-slate-700'}`}
+          >
+            {isMuted ? (
+              <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3l18 18" /></svg>
+            ) : (
+              <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" strokeWidth="2" /></svg>
+            )}
           </button>
         </div>
       </div>

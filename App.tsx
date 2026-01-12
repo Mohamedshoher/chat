@@ -14,10 +14,13 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  getAuth
+  getAuth,
+  setPersistence,
+  browserSessionPersistence
 } from 'firebase/auth';
 import {
   collection,
+  getDoc,
   query,
   where,
   onSnapshot,
@@ -56,7 +59,13 @@ const App: React.FC = () => {
   // Initialize Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
+      if (user) {
+        // Fetch user data immediately to break deadlock
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          setCurrentUser({ id: userDoc.id, ...userDoc.data() } as User);
+        }
+      } else {
         setCurrentUser(null);
         setActiveChatId(null);
       }
@@ -67,18 +76,24 @@ const App: React.FC = () => {
 
   // Listen to Users Collection
   useEffect(() => {
+    if (!currentUser) return; // Don't fetch users until logged in
+
     const q = query(collection(db, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
       setAllUsers(users);
 
+      // Update self ref just in case
       if (auth.currentUser) {
         const found = users.find(u => u.id === auth.currentUser?.uid);
         if (found) setCurrentUser(found);
       }
+    }, (error) => {
+      console.error("Users listener error:", error);
+      // Ignore permission errors during auth transition
     });
     return () => unsubscribe();
-  }, []);
+  }, [currentUser?.id]); // Re-run when user logs in
 
   // Listen to Chats Collection
   useEffect(() => {
@@ -92,6 +107,31 @@ const App: React.FC = () => {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      // Sound Logic
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'modified') {
+          const data = change.doc.data();
+          const messages = data.messages || [];
+          const settings = data.settings || DEFAULT_SETTINGS;
+
+          if (settings.soundEnabled && messages.length > 0) {
+            const lastMsg = messages[messages.length - 1];
+            // Play sound if last message is NOT me and is recent (less than 5s)
+            const msgTime = lastMsg.timestamp?.toDate ? lastMsg.timestamp.toDate() : new Date(lastMsg.timestamp);
+            const now = new Date();
+            if (lastMsg.senderId !== currentUser.id && (now.getTime() - msgTime.getTime() < 5000)) {
+              try {
+                const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2346/2346-preview.mp3');
+                audio.volume = 0.6;
+                audio.play().catch(e => console.log('Audio playback prevented:', e));
+              } catch (e) {
+                console.error("Audio error", e);
+              }
+            }
+          }
+        }
+      });
+
       const loadedChats = snapshot.docs.map(doc => {
         const data = doc.data();
         const messages = (data.messages || []).map((m: any) => ({
@@ -213,6 +253,10 @@ const App: React.FC = () => {
     try {
       setLoginError('');
       const email = `${name.replace(/\s+/g, '')}@zchat.com`;
+
+      // Force session persistence: User logged out if tab closes
+      await setPersistence(auth, browserSessionPersistence);
+
       await signInWithEmailAndPassword(auth, email, pass);
       if (auth.currentUser) {
         await updateDoc(doc(db, 'users', auth.currentUser.uid), { status: 'online' });
@@ -412,7 +456,7 @@ const App: React.FC = () => {
   }
 
   if (!currentUser) {
-    return <Login onLogin={handleLogin} onRegister={handleRegister} error={loginError} />;
+    return <Login onLogin={handleLogin} error={loginError} />;
   }
 
   const activeChat = chats.find(c => c.id === activeChatId);
@@ -428,6 +472,7 @@ const App: React.FC = () => {
           isAdmin={currentUser.role === 'admin'}
           onAdminClick={() => setShowAdminPanel(true)}
           currentUserId={currentUser.id}
+          onLogout={handleLogout}
         />
       </div>
 
