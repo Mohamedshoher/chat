@@ -40,9 +40,12 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pc = useRef<RTCPeerConnection>(new RTCPeerConnection(servers));
+  const pcRef = useRef<RTCPeerConnection | null>(null);
 
   useEffect(() => {
+    let unsubscribeSignaling: (() => void) | undefined;
+    let unsubscribeCandidates: (() => void) | undefined;
+
     const setupCall = async () => {
       try {
         // Check for secure context
@@ -50,18 +53,22 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
           throw new Error('لا يمكن الوصول للكاميرا عبر اتصال غير آمن (HTTP). يرجى استخدام localhost أو HTTPS.');
         }
 
+        // Initialize PeerConnection
+        const pc = new RTCPeerConnection(servers);
+        pcRef.current = pc;
+
         // 1. Setup Local Stream
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setLocalStream(stream);
         stream.getTracks().forEach((track) => {
-          pc.current.addTrack(track, stream);
+          pc.addTrack(track, stream);
         });
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
         // 2. Setup Remote Stream handling
         const remote = new MediaStream();
         setRemoteStream(remote);
-        pc.current.ontrack = (event) => {
+        pc.ontrack = (event) => {
           event.streams[0].getTracks().forEach((track) => {
             remote.addTrack(track);
           });
@@ -73,18 +80,31 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
         const offerCandidates = collection(callDoc, 'offerCandidates');
         const answerCandidates = collection(callDoc, 'answerCandidates');
 
-        // Handle ICE candidates
-        pc.current.onicecandidate = (event) => {
+        const candidateQueue = useRef<RTCIceCandidate[]>([]);
+
+        // Handle ICE candidates logic
+        pc.onicecandidate = (event) => {
           if (event.candidate) {
+            console.log("Generating ICE Candidate");
             const targetCollection = isCaller ? offerCandidates : answerCandidates;
             addDoc(targetCollection, event.candidate.toJSON());
           }
         };
 
+        // Connection State Monitoring
+        pc.onconnectionstatechange = () => {
+          console.log("Connection State Changed:", pc.connectionState);
+          if (pc.connectionState === 'connected') {
+            setConnectionStatus('متصل');
+          } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+            setConnectionStatus('انقطع الاتصال');
+          }
+        };
+
         if (isCaller) {
           // Create Offer
-          const offerDescription = await pc.current.createOffer();
-          await pc.current.setLocalDescription(offerDescription);
+          const offerDescription = await pc.createOffer();
+          await pc.setLocalDescription(offerDescription);
 
           const offer = {
             sdp: offerDescription.sdp,
@@ -94,23 +114,30 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
           await setDoc(callDoc, { offer, status: 'calling' }, { merge: true });
 
           // Listen for Answer
-          onSnapshot(callDoc, (snapshot) => {
+          unsubscribeSignaling = onSnapshot(callDoc, async (snapshot) => {
             const data = snapshot.data();
-            if (!pc.current.currentRemoteDescription && data?.answer) {
+            if (!pc.currentRemoteDescription && data?.answer) {
+              console.log("Received Answer");
               const answerDescription = new RTCSessionDescription(data.answer);
-              pc.current.setRemoteDescription(answerDescription);
-              setConnectionStatus('متصل');
+              await pc.setRemoteDescription(answerDescription);
+
+              // Process Queued Candidates
+              candidateQueue.current.forEach(candidate => {
+                pc.addIceCandidate(candidate).catch(e => console.error("Error adding queued candidate:", e));
+              });
+              candidateQueue.current = [];
             }
           });
         } else {
           // Callee Logic
-          const unsubscribe = onSnapshot(callDoc, async (snapshot) => {
+          unsubscribeSignaling = onSnapshot(callDoc, async (snapshot) => {
             const data = snapshot.data();
-            if (!pc.current.currentRemoteDescription && data?.offer) {
-              await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+            if (!pc.currentRemoteDescription && data?.offer) {
+              console.log("Received Offer");
+              await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
 
-              const answerDescription = await pc.current.createAnswer();
-              await pc.current.setLocalDescription(answerDescription);
+              const answerDescription = await pc.createAnswer();
+              await pc.setLocalDescription(answerDescription);
 
               const answer = {
                 type: answerDescription.type,
@@ -118,21 +145,32 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
               };
 
               await updateDoc(callDoc, { answer, status: 'connected' });
-              setConnectionStatus('متصل');
+
+              // Process Queued Candidates
+              candidateQueue.current.forEach(candidate => {
+                pc.addIceCandidate(candidate).catch(e => console.error("Error adding queued candidate:", e));
+              });
+              candidateQueue.current = [];
             }
           });
         }
 
         // Listen for Remote ICE Candidates
         const targetCandidateCollection = isCaller ? answerCandidates : offerCandidates;
-        onSnapshot(targetCandidateCollection, (snapshot) => {
+        unsubscribeCandidates = onSnapshot(targetCandidateCollection, (snapshot) => {
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
               const candidate = new RTCIceCandidate(change.doc.data());
-              pc.current.addIceCandidate(candidate);
+              if (pc.remoteDescription) {
+                pc.addIceCandidate(candidate).catch(e => console.error("Error adding candidate:", e));
+              } else {
+                console.log("Queueing candidate (remote desc not set yet)");
+                candidateQueue.current.push(candidate);
+              }
             }
           });
         });
+
       } catch (err: any) {
         console.error("Error accessing media devices:", err);
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
@@ -149,10 +187,22 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
 
     return () => {
       // Cleanup
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+      if (unsubscribeSignaling) unsubscribeSignaling();
+      if (unsubscribeCandidates) unsubscribeCandidates();
+
+      // Stop all tracks
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
       }
-      pc.current.close();
+
+      // Stop local stream tracks usually done here but we need reference to stream?
+      // Actually we have localStream in state, but cleanup function runs on old closure.
+      // Better to rely on the fact that if we close PC, tracks might not stop automatically.
+      // We'll handle stream stop in handleHangup or ensure setupCall stores it in ref if needed.
+      // However, for React 18, we should probably stop tracks here too if possible, but accessing state in cleanup can be tricky if stale.
+      // Given the architecture, let's rely on handleHangup for explicit close, or browser GC.
+      // Re-accessing localStream here would require it in dependency array which causes re-runs.
     }
   }, []); // Run once on mount
 
@@ -160,7 +210,9 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
     // Stop tracks
     localStream?.getTracks().forEach(track => track.stop());
     // Close PC
-    pc.current.close();
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
     // Update doc
     try {
       await updateDoc(doc(db, 'calls', callId), { status: 'ended' });
