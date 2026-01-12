@@ -1,0 +1,8 @@
+{
+  "name": "Z-Chat Premium",
+  "description": "A high-performance, feature-rich Arabic chat application inspired by Telegram and WhatsApp, featuring real-time AI assistance, video calls, and advanced message management.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
