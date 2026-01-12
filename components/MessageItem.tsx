@@ -23,7 +23,7 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, onDelete, onPi
 
         {/* Reaction Picker - Vertical Side Panel */}
         <div className={`absolute top-0 z-50 flex flex-col gap-1.5 p-1.5 rounded-full glass-panel shadow-lg transition-all duration-300 ${isMe ? '-left-10 -translate-x-2' : '-right-10 translate-x-2'
-          } ${showReactionPicker ? 'opacity-100 pointer-events-auto scale-100' : 'opacity-0 pointer-events-none scale-75 group-hover:opacity-100 group-hover:pointer-events-auto group-hover:scale-100'}`}>
+          } ${showReactionPicker ? 'opacity-100 pointer-events-auto scale-100' : 'opacity-0 pointer-events-none scale-75'}`}>
           <div className="absolute inset-0 bg-white/80 backdrop-blur-md rounded-full -z-10 shadow-sm"></div>
           {QUICK_REACTIONS.map(emoji => (
             <button
