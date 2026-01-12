@@ -158,13 +158,28 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chat, onSendMessage, onDeleteMe
                               key={option.val}
                               onClick={() => onUpdateSettings({ autoDeleteDuration: option.val })}
                               className={`px-2 py-1.5 rounded-lg text-[10px] transition-colors border ${(chat.settings.autoDeleteDuration || 1440) === option.val
-                                  ? 'bg-teal-500 text-white border-teal-500 shadow-sm'
-                                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                                ? 'bg-teal-500 text-white border-teal-500 shadow-sm'
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                                 }`}
                             >
                               {option.label}
                             </button>
                           ))}
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="1"
+                            placeholder="أو ادخل الدقائق..."
+                            className="w-full text-[10px] p-1.5 rounded-lg border border-slate-200 outline-none focus:border-teal-500"
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value);
+                              if (!isNaN(val) && val > 0) {
+                                onUpdateSettings({ autoDeleteDuration: val });
+                              }
+                            }}
+                          />
+                          <span className="text-[10px] text-slate-400 whitespace-nowrap">دقيقة</span>
                         </div>
                       </div>
                     )}

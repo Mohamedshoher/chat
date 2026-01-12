@@ -120,13 +120,7 @@ const App: React.FC = () => {
             const msgTime = lastMsg.timestamp?.toDate ? lastMsg.timestamp.toDate() : new Date(lastMsg.timestamp);
             const now = new Date();
             if (lastMsg.senderId !== currentUser.id && (now.getTime() - msgTime.getTime() < 5000)) {
-              try {
-                const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2346/2346-preview.mp3');
-                audio.volume = 0.6;
-                audio.play().catch(e => console.log('Audio playback prevented:', e));
-              } catch (e) {
-                console.error("Audio error", e);
-              }
+              playNotificationSound(settings.selectedSound);
             }
           }
         }
@@ -229,12 +223,40 @@ const App: React.FC = () => {
     markAsRead();
   }, [activeChatId, chats, currentUser]);
 
-  const playNotificationSound = useCallback(() => {
-    const activeChat = chats.find(c => c.id === activeChatId);
-    if (!activeChat?.settings.soundEnabled) return;
+  // Cleanup Expired Messages
+  useEffect(() => {
+    if (!currentUser) return;
+    const interval = setInterval(() => {
+      chats.forEach(async (chat) => {
+        if (chat.settings.autoDeleteEnabled && chat.settings.autoDeleteDuration) {
+          const now = new Date();
+          const cutoff = new Date(now.getTime() - chat.settings.autoDeleteDuration * 60 * 1000); // duration in minutes
 
+          // Check if there are expired messages
+          const expiredMessages = chat.messages.filter(m => {
+            const mTime = m.timestamp instanceof Date ? m.timestamp : (m.timestamp as any).toDate();
+            return mTime < cutoff;
+          });
+
+          if (expiredMessages.length > 0) {
+            const activeMessages = chat.messages.filter(m => {
+              const mTime = m.timestamp instanceof Date ? m.timestamp : (m.timestamp as any).toDate();
+              return mTime >= cutoff;
+            });
+            // Update doc only if we are the admin or one of the participants (simple concurrency handling)
+            // Ideally this is server side, but client side we just do it.
+            try {
+              await updateDoc(doc(db, 'chats', chat.id), { messages: activeMessages });
+            } catch (e) { console.error("Auto delete error", e); }
+          }
+        }
+      });
+    }, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, [chats, currentUser]);
+
+  const playNotificationSound = useCallback((soundType: string = 'default') => {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const type = activeChat.settings.selectedSound;
 
     const playNote = (freq: number, start: number, duration: number, vol: number = 0.1) => {
       const osc = ctx.createOscillator();
@@ -248,7 +270,7 @@ const App: React.FC = () => {
       osc.stop(ctx.currentTime + start + duration);
     };
 
-    switch (type) {
+    switch (soundType) {
       case 'soft': playNote(440, 0, 0.4, 0.05); break;
       case 'alert': playNote(880, 0, 0.1, 0.15); setTimeout(() => playNote(880, 0, 0.1, 0.15), 150); break;
       case 'melody':
@@ -258,7 +280,7 @@ const App: React.FC = () => {
         break;
       case 'default': default: playNote(880, 0, 0.5); break;
     }
-  }, [chats, activeChatId]);
+  }, []);
 
   const handleLogin = async (name: string, pass: string) => {
     try {
@@ -401,225 +423,229 @@ const App: React.FC = () => {
     await updateDoc(chatRef, {
       messages: arrayUnion(newMessage)
     });
-    if (text.includes("مساعد")) {
-      playNotificationSound();
-    }
-  }, [activeChatId, currentUser, playNotificationSound]);
-
-  const handleReactToMessage = async (messageId: string, emoji: string) => {
-    if (!activeChatId || !currentUser) return;
+  });
+  if (text.includes("مساعد")) {
     const activeChat = chats.find(c => c.id === activeChatId);
-    if (!activeChat) return;
-
-    const updatedMessages = activeChat.messages.map(m => {
-      if (m.id === messageId) {
-        const reactions = m.reactions || [];
-        const existingReactionIndex = reactions.findIndex(r => r.emoji === emoji);
-
-        let newReactions = [...reactions];
-
-        if (existingReactionIndex > -1) {
-          const reaction = newReactions[existingReactionIndex];
-          const users = reaction.users || (reaction.me ? [currentUser.id] : []); // Fallback logic
-          const userIndex = users.indexOf(currentUser.id);
-
-          let newUsers = [...users];
-          if (userIndex > -1) {
-            newUsers.splice(userIndex, 1);
-          } else {
-            newUsers.push(currentUser.id);
-          }
-
-          if (newUsers.length === 0) {
-            newReactions.splice(existingReactionIndex, 1);
-          } else {
-            newReactions[existingReactionIndex] = {
-              ...reaction,
-              users: newUsers,
-              count: newUsers.length,
-              me: newUsers.includes(currentUser.id)
-            };
-          }
-        } else {
-          newReactions.push({
-            emoji,
-            count: 1,
-            me: true,
-            users: [currentUser.id]
-          });
-        }
-        return { ...m, reactions: newReactions };
-      }
-      return m;
-    });
-
-    await updateDoc(doc(db, 'chats', activeChatId), {
-      messages: updatedMessages
-    });
-  };
-
-  // Admin handlers
-  const handleAddUser = async (newUserData: Partial<User>) => {
-    // ... copied from previous context or simplified as strictly required ...
-    // Re-implementing simplified version for clean file
-    try {
-      const name = newUserData.name || 'user';
-      const email = `${name.replace(/\s+/g, '')}@zchat.com`;
-      const password = newUserData.password || '123';
-
-      const secondaryApp = initializeApp(firebaseConfig, "Secondary");
-      const secondaryAuth = getAuth(secondaryApp);
-
-      const userCred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
-      const uid = userCred.user.uid;
-
-      const newUser: User = {
-        id: uid,
-        name: name,
-        password: password,
-        role: (newUserData.role as any) || 'user',
-        avatar: newUserData.avatar || `https://picsum.photos/seed/${name}/200`,
-        status: 'offline',
-      };
-
-      await setDoc(doc(db, 'users', uid), newUser);
-      await signOut(secondaryAuth);
-      await deleteApp(secondaryApp);
-
-      const admins = allUsers.filter(u => u.role === 'admin');
-      if (newUser.role === 'user') {
-        for (const admin of admins) {
-          const chatId = `chat_${admin.id}_${uid}`;
-          await setDoc(doc(db, 'chats', chatId), {
-            id: chatId,
-            participantIds: [admin.id, uid],
-            messages: [{ id: `m_welcome_${uid}`, senderId: admin.id, text: 'مرحباً بك! يمكنك بدء المراسلة هنا.', timestamp: new Date(), status: MessageStatus.SENT, type: 'text' }],
-            unreadCount: 0,
-            settings: { ...DEFAULT_SETTINGS }
-          });
-        }
-      }
-    } catch (error: any) {
-      console.error("Error adding user:", error);
-      alert("Error adding user: " + error.message);
+    if (activeChat && activeChat.settings.soundEnabled) {
+      playNotificationSound(activeChat.settings.selectedSound);
     }
-  };
-
-  const handleUpdateUser = async (userId: string, updates: Partial<User>) => {
-    try { await updateDoc(doc(db, 'users', userId), updates); } catch (e) { console.error(e); }
-  };
-
-  const handleDeleteUser = async (userId: string) => {
-    if (userId === auth.currentUser?.uid) { alert('لا يمكن حذف نفسك!'); return; }
-    if (confirm('هل أنت متأكد من حذف هذا المستخدم؟')) { await deleteDoc(doc(db, 'users', userId)); }
-  };
-
-  if (!authInitialized) {
-    return <div className="flex h-screen items-center justify-center bg-slate-900 text-white">جارٍ التحميل...</div>;
   }
+}, [activeChatId, currentUser, playNotificationSound, chats]);
 
-  if (!currentUser) {
-    return <Login onLogin={handleLogin} error={loginError} />;
-  }
-
+const handleReactToMessage = async (messageId: string, emoji: string) => {
+  if (!activeChatId || !currentUser) return;
   const activeChat = chats.find(c => c.id === activeChatId);
+  if (!activeChat) return;
 
-  return (
-    <div className="flex h-[100dvh] bg-transparent text-slate-800 overflow-hidden relative">
-      <div className={`${activeChatId ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 shrink-0`}>
-        <Sidebar
-          chats={chats}
-          activeChatId={activeChatId}
-          onChatSelect={setActiveChatId}
-          onProfileClick={() => setShowProfile(true)}
-          isAdmin={currentUser.role === 'admin'}
-          onAdminClick={() => setShowAdminPanel(true)}
+  const updatedMessages = activeChat.messages.map(m => {
+    if (m.id === messageId) {
+      const reactions = m.reactions || [];
+      const existingReactionIndex = reactions.findIndex(r => r.emoji === emoji);
+
+      let newReactions = [...reactions];
+
+      if (existingReactionIndex > -1) {
+        const reaction = newReactions[existingReactionIndex];
+        const users = reaction.users || (reaction.me ? [currentUser.id] : []); // Fallback logic
+        const userIndex = users.indexOf(currentUser.id);
+
+        let newUsers = [...users];
+        if (userIndex > -1) {
+          newUsers.splice(userIndex, 1);
+        } else {
+          newUsers.push(currentUser.id);
+        }
+
+        if (newUsers.length === 0) {
+          newReactions.splice(existingReactionIndex, 1);
+        } else {
+          newReactions[existingReactionIndex] = {
+            ...reaction,
+            users: newUsers,
+            count: newUsers.length,
+            me: newUsers.includes(currentUser.id)
+          };
+        }
+      } else {
+        newReactions.push({
+          emoji,
+          count: 1,
+          me: true,
+          users: [currentUser.id]
+        });
+      }
+      return { ...m, reactions: newReactions };
+    }
+    return m;
+  });
+
+  await updateDoc(doc(db, 'chats', activeChatId), {
+    messages: updatedMessages
+  });
+};
+
+// Admin handlers
+const handleAddUser = async (newUserData: Partial<User>) => {
+  // ... copied from previous context or simplified as strictly required ...
+  // Re-implementing simplified version for clean file
+  try {
+    const name = newUserData.name || 'user';
+    const email = `${name.replace(/\s+/g, '')}@zchat.com`;
+    const password = newUserData.password || '123';
+
+    const secondaryApp = initializeApp(firebaseConfig, "Secondary");
+    const secondaryAuth = getAuth(secondaryApp);
+
+    const userCred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+    const uid = userCred.user.uid;
+
+    const newUser: User = {
+      id: uid,
+      name: name,
+      password: password,
+      role: (newUserData.role as any) || 'user',
+      avatar: newUserData.avatar || `https://picsum.photos/seed/${name}/200`,
+      status: 'offline',
+    };
+
+    await setDoc(doc(db, 'users', uid), newUser);
+    await signOut(secondaryAuth);
+    await deleteApp(secondaryApp);
+
+    const admins = allUsers.filter(u => u.role === 'admin');
+    if (newUser.role === 'user') {
+      for (const admin of admins) {
+        const chatId = `chat_${admin.id}_${uid}`;
+        await setDoc(doc(db, 'chats', chatId), {
+          id: chatId,
+          participantIds: [admin.id, uid],
+          messages: [{ id: `m_welcome_${uid}`, senderId: admin.id, text: 'مرحباً بك! يمكنك بدء المراسلة هنا.', timestamp: new Date(), status: MessageStatus.SENT, type: 'text' }],
+          unreadCount: 0,
+          settings: { ...DEFAULT_SETTINGS }
+        });
+      }
+    }
+  } catch (error: any) {
+    console.error("Error adding user:", error);
+    alert("Error adding user: " + error.message);
+  }
+};
+
+const handleUpdateUser = async (userId: string, updates: Partial<User>) => {
+  try { await updateDoc(doc(db, 'users', userId), updates); } catch (e) { console.error(e); }
+};
+
+const handleDeleteUser = async (userId: string) => {
+  if (userId === auth.currentUser?.uid) { alert('لا يمكن حذف نفسك!'); return; }
+  if (confirm('هل أنت متأكد من حذف هذا المستخدم؟')) { await deleteDoc(doc(db, 'users', userId)); }
+};
+
+if (!authInitialized) {
+  return <div className="flex h-screen items-center justify-center bg-slate-900 text-white">جارٍ التحميل...</div>;
+}
+
+if (!currentUser) {
+  return <Login onLogin={handleLogin} error={loginError} />;
+}
+
+const activeChat = chats.find(c => c.id === activeChatId);
+
+return (
+  <div className="flex h-[100dvh] bg-transparent text-slate-800 overflow-hidden relative">
+    <div className={`${activeChatId ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 shrink-0`}>
+      <Sidebar
+        chats={chats}
+        activeChatId={activeChatId}
+        onChatSelect={setActiveChatId}
+        onProfileClick={() => setShowProfile(true)}
+        isAdmin={currentUser.role === 'admin'}
+        onAdminClick={() => setShowAdminPanel(true)}
+        currentUserId={currentUser.id}
+        onLogout={handleLogout}
+      />
+    </div>
+
+    <main className={`${activeChatId ? 'flex' : 'hidden md:flex'} flex-1 flex-col h-full bg-white/50 backdrop-blur-sm relative`}>
+      {activeChat ? (
+        <ChatWindow
+          chat={activeChat}
+          onSendMessage={handleSendMessage}
+          onDeleteMessage={async (id) => {
+            const newMessages = activeChat.messages.filter(m => m.id !== id);
+            await updateDoc(doc(db, 'chats', activeChat.id), { messages: newMessages });
+          }}
+          onPinMessage={async (id) => {
+            const newMessages = activeChat.messages.map(m => m.id === id ? { ...m, isPinned: !m.isPinned } : m);
+            await updateDoc(doc(db, 'chats', activeChat.id), { messages: newMessages });
+          }}
+          onReactToMessage={handleReactToMessage}
+          onUpdateSettings={async (settings) => {
+            await updateDoc(doc(db, 'chats', activeChat.id), { settings: { ...activeChat.settings, ...settings } });
+          }}
+          onStartVideoCall={handleStartVideoCall}
+          onBack={() => setActiveChatId(null)}
+          onTyping={handleTyping}
           currentUserId={currentUser.id}
-          onLogout={handleLogout}
         />
-      </div>
-
-      <main className={`${activeChatId ? 'flex' : 'hidden md:flex'} flex-1 flex-col h-full bg-white/50 backdrop-blur-sm relative`}>
-        {activeChat ? (
-          <ChatWindow
-            chat={activeChat}
-            onSendMessage={handleSendMessage}
-            onDeleteMessage={async (id) => {
-              const newMessages = activeChat.messages.filter(m => m.id !== id);
-              await updateDoc(doc(db, 'chats', activeChat.id), { messages: newMessages });
-            }}
-            onPinMessage={async (id) => {
-              const newMessages = activeChat.messages.map(m => m.id === id ? { ...m, isPinned: !m.isPinned } : m);
-              await updateDoc(doc(db, 'chats', activeChat.id), { messages: newMessages });
-            }}
-            onReactToMessage={handleReactToMessage}
-            onUpdateSettings={async (settings) => {
-              await updateDoc(doc(db, 'chats', activeChat.id), { settings: { ...activeChat.settings, ...settings } });
-            }}
-            onStartVideoCall={handleStartVideoCall}
-            onBack={() => setActiveChatId(null)}
-            onTyping={handleTyping}
-            currentUserId={currentUser.id}
-          />
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center opacity-40 p-10 text-center">
-            <svg className="w-24 h-24 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" strokeWidth={1.5} /></svg>
-            <p className="text-xl font-bold">Z-Chat Premium</p>
-            <p className="mt-2 text-slate-400">اختر محادثة للبدء أو أضف مستخدماً جديداً إذا كنت مديراً</p>
-          </div>
-        )}
-      </main>
-
-      {/* Incoming Call Modal */}
-      {incomingCallData && !activeCallData && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-800 rounded-3xl p-8 max-w-sm w-full text-center border-2 border-teal-500/50 shadow-2xl animate-in zoom-in duration-300">
-            <img src={incomingCallData.participant.avatar} className="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-teal-500 animate-bounce" alt="" />
-            <h3 className="text-2xl font-bold text-white mb-1">{incomingCallData.participant.name}</h3>
-            <p className="text-slate-400 mb-8">يتصل بك فيديو...</p>
-
-            <div className="flex gap-4 justify-center">
-              <button
-                onClick={handleRejectCall}
-                className="p-4 bg-red-600 hover:bg-red-500 rounded-full text-white transition-transform hover:scale-110"
-              >
-                <svg className="w-8 h-8 rotate-[135deg]" fill="currentColor" viewBox="0 0 20 20"><path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" /></svg>
-              </button>
-              <button
-                onClick={handleAcceptCall}
-                className="p-4 bg-green-500 hover:bg-green-400 rounded-full text-white transition-transform hover:scale-110 animate-pulse"
-              >
-                <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" /></svg>
-              </button>
-            </div>
-          </div>
+      ) : (
+        <div className="flex-1 flex flex-col items-center justify-center opacity-40 p-10 text-center">
+          <svg className="w-24 h-24 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" strokeWidth={1.5} /></svg>
+          <p className="text-xl font-bold">Z-Chat Premium</p>
+          <p className="mt-2 text-slate-400">اختر محادثة للبدء أو أضف مستخدماً جديداً إذا كنت مديراً</p>
         </div>
       )}
+    </main>
 
-      {activeEffect && <ReactionOverlay emoji={activeEffect} />}
+    {/* Incoming Call Modal */}
+    {incomingCallData && !activeCallData && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="bg-slate-800 rounded-3xl p-8 max-w-sm w-full text-center border-2 border-teal-500/50 shadow-2xl animate-in zoom-in duration-300">
+          <img src={incomingCallData.participant.avatar} className="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-teal-500 animate-bounce" alt="" />
+          <h3 className="text-2xl font-bold text-white mb-1">{incomingCallData.participant.name}</h3>
+          <p className="text-slate-400 mb-8">يتصل بك فيديو...</p>
 
-      {activeCallData && (
-        <VideoCall
-          participant={activeCallData.participant}
-          currentUser={currentUser}
-          callId={activeCallData.id}
-          isCaller={activeCallData.isCaller}
-          onClose={() => setActiveCallData(null)}
-        />
-      )}
+          <div className="flex gap-4 justify-center">
+            <button
+              onClick={handleRejectCall}
+              className="p-4 bg-red-600 hover:bg-red-500 rounded-full text-white transition-transform hover:scale-110"
+            >
+              <svg className="w-8 h-8 rotate-[135deg]" fill="currentColor" viewBox="0 0 20 20"><path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" /></svg>
+            </button>
+            <button
+              onClick={handleAcceptCall}
+              className="p-4 bg-green-500 hover:bg-green-400 rounded-full text-white transition-transform hover:scale-110 animate-pulse"
+            >
+              <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" /></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
-      {showProfile && <ProfileSettings user={currentUser} onClose={() => setShowProfile(false)} onLogout={handleLogout} />}
-      {showAdminPanel && (
-        <AdminPanel
-          users={allUsers}
-          onAddUser={handleAddUser}
-          onUpdateUser={handleUpdateUser}
-          onDeleteUser={handleDeleteUser}
-          onClose={() => setShowAdminPanel(false)}
-        />
-      )}
-    </div>
-  );
+    {activeEffect && <ReactionOverlay emoji={activeEffect} />}
+
+    {activeCallData && (
+      <VideoCall
+        participant={activeCallData.participant}
+        currentUser={currentUser}
+        callId={activeCallData.id}
+        isCaller={activeCallData.isCaller}
+        onClose={() => setActiveCallData(null)}
+      />
+    )}
+
+    {showProfile && <ProfileSettings user={currentUser} onClose={() => setShowProfile(false)} onLogout={handleLogout} />}
+    {showAdminPanel && (
+      <AdminPanel
+        users={allUsers}
+        onAddUser={handleAddUser}
+        onUpdateUser={handleUpdateUser}
+        onDeleteUser={handleDeleteUser}
+        onClose={() => setShowAdminPanel(false)}
+      />
+    )}
+  </div>
+);
 };
 
 export default App;
