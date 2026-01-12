@@ -134,10 +134,21 @@ const App: React.FC = () => {
 
       const loadedChats = snapshot.docs.map(doc => {
         const data = doc.data();
-        const messages = (data.messages || []).map((m: any) => ({
-          ...m,
-          timestamp: m.timestamp?.toDate ? m.timestamp.toDate() : new Date(m.timestamp)
-        }));
+        const messages = (data.messages || []).map((m: any) => {
+          const timestamp = m.timestamp?.toDate ? m.timestamp.toDate() : new Date(m.timestamp);
+          const reactions = (m.reactions || []).map((r: any) => {
+            // If users array exists, use it to determine truth
+            if (r.users && Array.isArray(r.users)) {
+              return {
+                ...r,
+                count: r.users.length,
+                me: r.users.includes(currentUser.id)
+              };
+            }
+            return r;
+          });
+          return { ...m, timestamp, reactions };
+        });
 
         const participants = (data.participantIds || []).map((pid: string) => {
           return allUsers.find(u => u.id === pid) || {
@@ -395,6 +406,58 @@ const App: React.FC = () => {
     }
   }, [activeChatId, currentUser, playNotificationSound]);
 
+  const handleReactToMessage = async (messageId: string, emoji: string) => {
+    if (!activeChatId || !currentUser) return;
+    const activeChat = chats.find(c => c.id === activeChatId);
+    if (!activeChat) return;
+
+    const updatedMessages = activeChat.messages.map(m => {
+      if (m.id === messageId) {
+        const reactions = m.reactions || [];
+        const existingReactionIndex = reactions.findIndex(r => r.emoji === emoji);
+
+        let newReactions = [...reactions];
+
+        if (existingReactionIndex > -1) {
+          const reaction = newReactions[existingReactionIndex];
+          const users = reaction.users || (reaction.me ? [currentUser.id] : []); // Fallback logic
+          const userIndex = users.indexOf(currentUser.id);
+
+          let newUsers = [...users];
+          if (userIndex > -1) {
+            newUsers.splice(userIndex, 1);
+          } else {
+            newUsers.push(currentUser.id);
+          }
+
+          if (newUsers.length === 0) {
+            newReactions.splice(existingReactionIndex, 1);
+          } else {
+            newReactions[existingReactionIndex] = {
+              ...reaction,
+              users: newUsers,
+              count: newUsers.length,
+              me: newUsers.includes(currentUser.id)
+            };
+          }
+        } else {
+          newReactions.push({
+            emoji,
+            count: 1,
+            me: true,
+            users: [currentUser.id]
+          });
+        }
+        return { ...m, reactions: newReactions };
+      }
+      return m;
+    });
+
+    await updateDoc(doc(db, 'chats', activeChatId), {
+      messages: updatedMessages
+    });
+  };
+
   // Admin handlers
   const handleAddUser = async (newUserData: Partial<User>) => {
     // ... copied from previous context or simplified as strictly required ...
@@ -462,7 +525,7 @@ const App: React.FC = () => {
   const activeChat = chats.find(c => c.id === activeChatId);
 
   return (
-    <div className="flex h-screen bg-transparent text-slate-800 overflow-hidden relative">
+    <div className="flex h-[100dvh] bg-transparent text-slate-800 overflow-hidden relative">
       <div className={`${activeChatId ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 shrink-0`}>
         <Sidebar
           chats={chats}
@@ -489,7 +552,7 @@ const App: React.FC = () => {
               const newMessages = activeChat.messages.map(m => m.id === id ? { ...m, isPinned: !m.isPinned } : m);
               await updateDoc(doc(db, 'chats', activeChat.id), { messages: newMessages });
             }}
-            onReactToMessage={() => { }}
+            onReactToMessage={handleReactToMessage}
             onUpdateSettings={async (settings) => {
               await updateDoc(doc(db, 'chats', activeChat.id), { settings: { ...activeChat.settings, ...settings } });
             }}

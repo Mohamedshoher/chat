@@ -38,94 +38,111 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
 
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const pc = useRef<RTCPeerConnection>(new RTCPeerConnection(servers));
 
   useEffect(() => {
     const setupCall = async () => {
-      // 1. Setup Local Stream
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      setLocalStream(stream);
-      stream.getTracks().forEach((track) => {
-        pc.current.addTrack(track, stream);
-      });
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-
-      // 2. Setup Remote Stream handling
-      const remote = new MediaStream();
-      setRemoteStream(remote);
-      pc.current.ontrack = (event) => {
-        event.streams[0].getTracks().forEach((track) => {
-          remote.addTrack(track);
-        });
-      };
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remote;
-
-      // 3. Signaling
-      const callDoc = doc(db, 'calls', callId);
-      const offerCandidates = collection(callDoc, 'offerCandidates');
-      const answerCandidates = collection(callDoc, 'answerCandidates');
-
-      // Handle ICE candidates
-      pc.current.onicecandidate = (event) => {
-        if (event.candidate) {
-          const targetCollection = isCaller ? offerCandidates : answerCandidates;
-          addDoc(targetCollection, event.candidate.toJSON());
+      try {
+        // Check for secure context
+        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+          throw new Error('لا يمكن الوصول للكاميرا عبر اتصال غير آمن (HTTP). يرجى استخدام localhost أو HTTPS.');
         }
-      };
 
-      if (isCaller) {
-        // Create Offer
-        const offerDescription = await pc.current.createOffer();
-        await pc.current.setLocalDescription(offerDescription);
+        // 1. Setup Local Stream
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        setLocalStream(stream);
+        stream.getTracks().forEach((track) => {
+          pc.current.addTrack(track, stream);
+        });
+        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-        const offer = {
-          sdp: offerDescription.sdp,
-          type: offerDescription.type,
+        // 2. Setup Remote Stream handling
+        const remote = new MediaStream();
+        setRemoteStream(remote);
+        pc.current.ontrack = (event) => {
+          event.streams[0].getTracks().forEach((track) => {
+            remote.addTrack(track);
+          });
+        };
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remote;
+
+        // 3. Signaling
+        const callDoc = doc(db, 'calls', callId);
+        const offerCandidates = collection(callDoc, 'offerCandidates');
+        const answerCandidates = collection(callDoc, 'answerCandidates');
+
+        // Handle ICE candidates
+        pc.current.onicecandidate = (event) => {
+          if (event.candidate) {
+            const targetCollection = isCaller ? offerCandidates : answerCandidates;
+            addDoc(targetCollection, event.candidate.toJSON());
+          }
         };
 
-        await setDoc(callDoc, { offer, status: 'calling' }, { merge: true });
+        if (isCaller) {
+          // Create Offer
+          const offerDescription = await pc.current.createOffer();
+          await pc.current.setLocalDescription(offerDescription);
 
-        // Listen for Answer
-        onSnapshot(callDoc, (snapshot) => {
-          const data = snapshot.data();
-          if (!pc.current.currentRemoteDescription && data?.answer) {
-            const answerDescription = new RTCSessionDescription(data.answer);
-            pc.current.setRemoteDescription(answerDescription);
-            setConnectionStatus('متصل');
-          }
+          const offer = {
+            sdp: offerDescription.sdp,
+            type: offerDescription.type,
+          };
+
+          await setDoc(callDoc, { offer, status: 'calling' }, { merge: true });
+
+          // Listen for Answer
+          onSnapshot(callDoc, (snapshot) => {
+            const data = snapshot.data();
+            if (!pc.current.currentRemoteDescription && data?.answer) {
+              const answerDescription = new RTCSessionDescription(data.answer);
+              pc.current.setRemoteDescription(answerDescription);
+              setConnectionStatus('متصل');
+            }
+          });
+        } else {
+          // Callee Logic
+          const unsubscribe = onSnapshot(callDoc, async (snapshot) => {
+            const data = snapshot.data();
+            if (!pc.current.currentRemoteDescription && data?.offer) {
+              await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+              const answerDescription = await pc.current.createAnswer();
+              await pc.current.setLocalDescription(answerDescription);
+
+              const answer = {
+                type: answerDescription.type,
+                sdp: answerDescription.sdp,
+              };
+
+              await updateDoc(callDoc, { answer, status: 'connected' });
+              setConnectionStatus('متصل');
+            }
+          });
+        }
+
+        // Listen for Remote ICE Candidates
+        const targetCandidateCollection = isCaller ? answerCandidates : offerCandidates;
+        onSnapshot(targetCandidateCollection, (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+              const candidate = new RTCIceCandidate(change.doc.data());
+              pc.current.addIceCandidate(candidate);
+            }
+          });
         });
-      } else {
-        // Callee Logic
-        const unsubscribe = onSnapshot(callDoc, async (snapshot) => {
-          const data = snapshot.data();
-          if (!pc.current.currentRemoteDescription && data?.offer) {
-            await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-
-            const answerDescription = await pc.current.createAnswer();
-            await pc.current.setLocalDescription(answerDescription);
-
-            const answer = {
-              type: answerDescription.type,
-              sdp: answerDescription.sdp,
-            };
-
-            await updateDoc(callDoc, { answer, status: 'connected' });
-            setConnectionStatus('متصل');
-          }
-        });
+      } catch (err: any) {
+        console.error("Error accessing media devices:", err);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setError('يرجى السماح بالوصول للكاميرا والميكروفون للمتابعة.');
+        } else if (err.name === 'NotFoundError') {
+          setError('لم يتم العثور على كاميرا أو ميكروفون.');
+        } else {
+          setError(err.message || 'حدث خطأ أثناء الوصول للأجهزة.');
+        }
       }
-
-      // Listen for Remote ICE Candidates
-      const targetCandidateCollection = isCaller ? answerCandidates : offerCandidates;
-      onSnapshot(targetCandidateCollection, (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const candidate = new RTCIceCandidate(change.doc.data());
-            pc.current.addIceCandidate(candidate);
-          }
-        });
-      });
     };
 
     setupCall();
@@ -176,6 +193,22 @@ const VideoCall: React.FC<VideoCallProps> = ({ participant, currentUser, callId,
   return (
     <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center">
       <div className="relative w-full h-full md:w-[90%] md:h-[90vh] md:max-w-4xl bg-slate-900 md:rounded-3xl overflow-hidden shadow-2xl border-slate-700">
+
+        {/* Error Overlay */}
+        {error && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/90 backdrop-blur-md p-6">
+            <div className="text-center max-w-md">
+              <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/50">
+                <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">تعذر الوصول للكاميرا</h3>
+              <p className="text-slate-300 mb-6">{error}</p>
+              <button onClick={onClose} className="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors">
+                إغلاق المكالمة
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Remote Video */}
         <div className="absolute inset-0 bg-slate-800 flex items-center justify-center">

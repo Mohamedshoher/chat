@@ -9,6 +9,7 @@ export interface Reaction {
   emoji: string;
   count: number;
   me: boolean;
+  users?: string[];
 }
 
 export type UserRole = 'admin' | 'user';
